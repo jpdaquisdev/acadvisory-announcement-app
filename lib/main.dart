@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
 import 'announcement_setter_page.dart';
@@ -24,7 +25,35 @@ class MyApp1 extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Announcements',
-      home: const AuthPage(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Colors.white,
+            body: Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+
+        if (snapshot.hasData) {
+          return const ViewPostsPage();
+        }
+
+        return const AuthPage();
+      },
     );
   }
 }
@@ -41,13 +70,169 @@ class _AuthPageState extends State<AuthPage> {
   bool showPanel = true;
   bool liftLogo = false;
   bool isSwitching = false;
+  bool isAuthLoading = false;
+  String? authMessage;
+
+  final TextEditingController loginEmailController = TextEditingController();
+  final TextEditingController loginPasswordController = TextEditingController();
+  final TextEditingController firstNameController = TextEditingController();
+  final TextEditingController lastNameController = TextEditingController();
+  final TextEditingController usernameController = TextEditingController();
+  final TextEditingController signUpEmailController = TextEditingController();
+  final TextEditingController signUpPasswordController = TextEditingController();
 
   static const Color accentColor = Color(0xffFFD24C);
   static const Color softYellow = Color(0xffFFF1C8);
   static const Color softGray = Color(0xffEFEFEF);
 
+  @override
+  void dispose() {
+    loginEmailController.dispose();
+    loginPasswordController.dispose();
+    firstNameController.dispose();
+    lastNameController.dispose();
+    usernameController.dispose();
+    signUpEmailController.dispose();
+    signUpPasswordController.dispose();
+    super.dispose();
+  }
+
+  void setAuthMessage(String? message) {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      authMessage = message;
+    });
+  }
+
+  String getFirebaseAuthMessage(FirebaseAuthException error) {
+    if (error.code == 'invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+
+    if (error.code == 'user-disabled') {
+      return 'This account has been disabled.';
+    }
+
+    if (error.code == 'user-not-found' ||
+        error.code == 'wrong-password' ||
+        error.code == 'invalid-credential') {
+      return 'Incorrect email or password.';
+    }
+
+    if (error.code == 'email-already-in-use') {
+      return 'This email already has an account.';
+    }
+
+    if (error.code == 'weak-password') {
+      return 'Password must be at least 6 characters.';
+    }
+
+    if (error.code == 'network-request-failed') {
+      return 'Please check your internet connection.';
+    }
+
+    return error.message ?? 'Something went wrong. Please try again.';
+  }
+
+  Future<void> signIn() async {
+    final email = loginEmailController.text.trim();
+    final password = loginPasswordController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      setAuthMessage('Please enter your email and password.');
+      return;
+    }
+
+    setState(() {
+      isAuthLoading = true;
+      authMessage = null;
+    });
+
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+    } on FirebaseAuthException catch (error) {
+      setAuthMessage(getFirebaseAuthMessage(error));
+    } catch (_) {
+      setAuthMessage('Something went wrong. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isAuthLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> signUp() async {
+    final firstName = firstNameController.text.trim();
+    final lastName = lastNameController.text.trim();
+    final username = usernameController.text.trim();
+    final email = signUpEmailController.text.trim();
+    final password = signUpPasswordController.text.trim();
+
+    if (firstName.isEmpty ||
+        lastName.isEmpty ||
+        username.isEmpty ||
+        email.isEmpty ||
+        password.isEmpty) {
+      setAuthMessage('Please complete all sign up fields.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setAuthMessage('Password must be at least 6 characters.');
+      return;
+    }
+
+    setState(() {
+      isAuthLoading = true;
+      authMessage = null;
+    });
+
+    try {
+      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      final user = credential.user;
+      final fullName = '$firstName $lastName'.trim();
+
+      if (user != null) {
+        await user.updateDisplayName(fullName);
+
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'uid': user.uid,
+          'firstName': firstName,
+          'lastName': lastName,
+          'username': username,
+          'email': email,
+          'role': 'Student',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } on FirebaseAuthException catch (error) {
+      setAuthMessage(getFirebaseAuthMessage(error));
+    } catch (_) {
+      setAuthMessage('Something went wrong. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isAuthLoading = false;
+        });
+      }
+    }
+  }
+
   Future<void> switchAuthView(bool openLogin) async {
-    if (isLoginView == openLogin || isSwitching) {
+    if (isLoginView == openLogin || isSwitching || isAuthLoading) {
       return;
     }
 
@@ -55,6 +240,7 @@ class _AuthPageState extends State<AuthPage> {
       isSwitching = true;
       showPanel = false;
       liftLogo = true;
+      authMessage = null;
     });
 
     await Future.delayed(const Duration(milliseconds: 320));
@@ -78,15 +264,6 @@ class _AuthPageState extends State<AuthPage> {
       liftLogo = false;
       isSwitching = false;
     });
-  }
-
-  void continueToApp() {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const ViewPostsPage(),
-      ),
-    );
   }
 
   @override
@@ -134,14 +311,25 @@ class _AuthPageState extends State<AuthPage> {
                       child: isLoginView
                           ? _LoginPanel(
                               key: const ValueKey('login-panel'),
-                              onSignIn: continueToApp,
+                              emailController: loginEmailController,
+                              passwordController: loginPasswordController,
+                              authMessage: authMessage,
+                              isLoading: isAuthLoading,
+                              onSignIn: signIn,
                               onOpenSignUp: () {
                                 switchAuthView(false);
                               },
                             )
                           : _SignUpPanel(
                               key: const ValueKey('signup-panel'),
-                              onSignUp: continueToApp,
+                              firstNameController: firstNameController,
+                              lastNameController: lastNameController,
+                              usernameController: usernameController,
+                              emailController: signUpEmailController,
+                              passwordController: signUpPasswordController,
+                              authMessage: authMessage,
+                              isLoading: isAuthLoading,
+                              onSignUp: signUp,
                               onOpenLogin: () {
                                 switchAuthView(true);
                               },
@@ -200,11 +388,19 @@ class _AcadvisoryLogo extends StatelessWidget {
 }
 
 class _LoginPanel extends StatelessWidget {
+  final TextEditingController emailController;
+  final TextEditingController passwordController;
+  final String? authMessage;
+  final bool isLoading;
   final VoidCallback onSignIn;
   final VoidCallback onOpenSignUp;
 
   const _LoginPanel({
     super.key,
+    required this.emailController,
+    required this.passwordController,
+    required this.authMessage,
+    required this.isLoading,
     required this.onSignIn,
     required this.onOpenSignUp,
   });
@@ -224,22 +420,29 @@ class _LoginPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 42),
-          const _AuthTextField(
-            hintText: 'USERNAME',
+          _AuthTextField(
+            controller: emailController,
+            hintText: 'EMAIL',
             fillColor: _AuthPageState.softGray,
             obscureText: false,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 18),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: passwordController,
             hintText: 'PASSWORD',
             fillColor: _AuthPageState.softGray,
             obscureText: true,
+            textInputAction: TextInputAction.done,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 10),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton(
-              onPressed: () {},
+              onPressed: isLoading ? null : () {},
               style: TextButton.styleFrom(
                 foregroundColor: Colors.black,
                 padding: EdgeInsets.zero,
@@ -250,18 +453,22 @@ class _LoginPanel extends StatelessWidget {
               ),
             ),
           ),
+          if (authMessage != null) ...[
+            const SizedBox(height: 8),
+            _AuthMessage(text: authMessage!),
+          ],
           const SizedBox(height: 26),
           _AuthRoundedButton(
-            label: 'Sign In',
+            label: isLoading ? 'Signing In...' : 'Sign In',
             backgroundColor: _AuthPageState.accentColor,
             textColor: Colors.black,
-            onTap: onSignIn,
+            onTap: isLoading ? null : onSignIn,
           ),
           const SizedBox(height: 28),
           _AuthSwitchText(
             normalText: "Don't have an account yet? ",
             actionText: 'SIGN UP',
-            onTap: onOpenSignUp,
+            onTap: isLoading ? () {} : onOpenSignUp,
           ),
         ],
       ),
@@ -270,11 +477,25 @@ class _LoginPanel extends StatelessWidget {
 }
 
 class _SignUpPanel extends StatelessWidget {
+  final TextEditingController firstNameController;
+  final TextEditingController lastNameController;
+  final TextEditingController usernameController;
+  final TextEditingController emailController;
+  final TextEditingController passwordController;
+  final String? authMessage;
+  final bool isLoading;
   final VoidCallback onSignUp;
   final VoidCallback onOpenLogin;
 
   const _SignUpPanel({
     super.key,
+    required this.firstNameController,
+    required this.lastNameController,
+    required this.usernameController,
+    required this.emailController,
+    required this.passwordController,
+    required this.authMessage,
+    required this.isLoading,
     required this.onSignUp,
     required this.onOpenLogin,
   });
@@ -293,52 +514,72 @@ class _SignUpPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 22),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: firstNameController,
             hintText: 'FIRST NAME',
             fillColor: Colors.white,
             obscureText: false,
             showShadow: true,
+            textInputAction: TextInputAction.next,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 16),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: lastNameController,
             hintText: 'LAST NAME',
             fillColor: Colors.white,
             obscureText: false,
             showShadow: true,
+            textInputAction: TextInputAction.next,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 16),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: usernameController,
             hintText: 'USERNAME',
             fillColor: Colors.white,
             obscureText: false,
             showShadow: true,
+            textInputAction: TextInputAction.next,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 16),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: emailController,
             hintText: 'EMAIL',
             fillColor: Colors.white,
             obscureText: false,
             showShadow: true,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            enabled: !isLoading,
           ),
           const SizedBox(height: 16),
-          const _AuthTextField(
+          _AuthTextField(
+            controller: passwordController,
             hintText: 'PASSWORD',
             fillColor: Colors.white,
             obscureText: true,
             showShadow: true,
+            textInputAction: TextInputAction.done,
+            enabled: !isLoading,
           ),
+          if (authMessage != null) ...[
+            const SizedBox(height: 14),
+            _AuthMessage(text: authMessage!),
+          ],
           const SizedBox(height: 28),
           _AuthRoundedButton(
-            label: 'Sign Up',
+            label: isLoading ? 'Signing Up...' : 'Sign Up',
             backgroundColor: Colors.black,
             textColor: Colors.white,
-            onTap: onSignUp,
+            onTap: isLoading ? null : onSignUp,
           ),
           const SizedBox(height: 22),
           _AuthSwitchText(
             normalText: 'Already have an account? ',
             actionText: 'LOGIN',
-            onTap: onOpenLogin,
+            onTap: isLoading ? () {} : onOpenLogin,
           ),
         ],
       ),
@@ -347,16 +588,24 @@ class _SignUpPanel extends StatelessWidget {
 }
 
 class _AuthTextField extends StatelessWidget {
+  final TextEditingController? controller;
   final String hintText;
   final Color fillColor;
   final bool obscureText;
   final bool showShadow;
+  final TextInputType keyboardType;
+  final TextInputAction textInputAction;
+  final bool enabled;
 
   const _AuthTextField({
+    this.controller,
     required this.hintText,
     required this.fillColor,
     required this.obscureText,
     this.showShadow = false,
+    this.keyboardType = TextInputType.text,
+    this.textInputAction = TextInputAction.next,
+    this.enabled = true,
   });
 
   @override
@@ -377,7 +626,11 @@ class _AuthTextField extends StatelessWidget {
             : null,
       ),
       child: TextField(
+        controller: controller,
         obscureText: obscureText,
+        keyboardType: keyboardType,
+        textInputAction: textInputAction,
+        enabled: enabled,
         style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
           hintText: hintText,
@@ -393,11 +646,39 @@ class _AuthTextField extends StatelessWidget {
   }
 }
 
+class _AuthMessage extends StatelessWidget {
+  final String text;
+
+  const _AuthMessage({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.red.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.red.shade100),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.red,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
 class _AuthRoundedButton extends StatelessWidget {
   final String label;
   final Color backgroundColor;
   final Color textColor;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _AuthRoundedButton({
     required this.label,
@@ -410,20 +691,23 @@ class _AuthRoundedButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        height: 60,
-        width: double.infinity,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: backgroundColor,
-          borderRadius: BorderRadius.circular(30),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: textColor,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
+      child: Opacity(
+        opacity: onTap == null ? 0.7 : 1,
+        child: Container(
+          height: 60,
+          width: double.infinity,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),
@@ -490,117 +774,175 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
+  Future<void> logout(BuildContext context) async {
+    await FirebaseAuth.instance.signOut();
+
+    if (!context.mounted) {
+      return;
+    }
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AuthGate(),
+      ),
+      (route) => false,
+    );
+  }
+
+  String getFullName(Map<String, dynamic>? userData, User? user) {
+    final firstName = (userData?['firstName'] ?? '').toString().trim();
+    final lastName = (userData?['lastName'] ?? '').toString().trim();
+    final fullName = '$firstName $lastName'.trim();
+
+    if (fullName.isNotEmpty) {
+      return fullName.toUpperCase();
+    }
+
+    if ((user?.displayName ?? '').trim().isNotEmpty) {
+      return user!.displayName!.trim().toUpperCase();
+    }
+
+    return (user?.email ?? 'USER').toUpperCase();
+  }
+
+  String getRole(Map<String, dynamic>? userData) {
+    return (userData?['role'] ?? 'Student').toString().toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    GestureDetector(
-                      onTap: () {
-                        Navigator.pop(context);
-                      },
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xffBDBDBD)),
+        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: currentUser == null
+              ? null
+              : FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(currentUser.uid)
+                  .snapshots(),
+          builder: (context, snapshot) {
+            final userData = snapshot.data?.data();
+            final fullName = getFullName(userData, currentUser);
+            final role = getRole(userData);
+
+            return Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pop(context);
+                          },
+                          child: Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xffBDBDBD)),
+                            ),
+                            child: const Icon(
+                              Icons.arrow_back_ios_new,
+                              color: Color(0xff6A6A6A),
+                            ),
+                          ),
                         ),
-                        child: const Icon(
-                          Icons.arrow_back_ios_new,
-                          color: Color(0xff6A6A6A),
+                        const SizedBox(height: 26),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: const [
+                            _ProfilePill(
+                              text: 'PROFILE',
+                              color: _AuthPageState.accentColor,
+                            ),
+                            _ProfilePill(
+                              text: 'EDIT PROFILE',
+                              color: _AuthPageState.softYellow,
+                            ),
+                          ],
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 26),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: const [
-                        _ProfilePill(
-                          text: 'PROFILE',
-                          color: _AuthPageState.accentColor,
+                        const SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
+                          decoration: BoxDecoration(
+                            color: const Color(0xffE5E5E5),
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: Column(
+                            children: [
+                              const CircleAvatar(
+                                radius: 78,
+                                backgroundColor: Color(0xffB8B8B8),
+                              ),
+                              const SizedBox(height: 24),
+                              Text(
+                                fullName,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                role,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        _ProfilePill(
-                          text: 'EDIT PROFILE',
-                          color: _AuthPageState.softYellow,
+                        const SizedBox(height: 14),
+                        const _ProfileMenuItem(text: 'Language'),
+                        const SizedBox(height: 6),
+                        const _ProfileMenuItem(text: 'Notification'),
+                        const SizedBox(height: 6),
+                        const _ProfileMenuItem(text: 'Change Password'),
+                        const SizedBox(height: 28),
+                        const _ProfileMenuItem(text: 'Help'),
+                        const SizedBox(height: 6),
+                        const _ProfileMenuItem(text: 'Change User'),
+                        const SizedBox(height: 6),
+                        _ProfileMenuItem(
+                          text: 'Logout',
+                          onTap: () {
+                            logout(context);
+                          },
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
-                      decoration: BoxDecoration(
-                        color: const Color(0xffE5E5E5),
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      child: Column(
-                        children: const [
-                          CircleAvatar(
-                            radius: 78,
-                            backgroundColor: Color(0xffB8B8B8),
-                          ),
-                          SizedBox(height: 24),
-                          Text(
-                            'JOHN LORENZ T. MALSI',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'STUDENT',
-                            style: TextStyle(
-                              fontSize: 17,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const _ProfileMenuItem(text: 'Language'),
-                    const SizedBox(height: 6),
-                    const _ProfileMenuItem(text: 'Notification'),
-                    const SizedBox(height: 6),
-                    const _ProfileMenuItem(text: 'Change Password'),
-                    const SizedBox(height: 28),
-                    const _ProfileMenuItem(text: 'Help'),
-                    const SizedBox(height: 6),
-                    const _ProfileMenuItem(text: 'Change User'),
-                    const SizedBox(height: 6),
-                    const _ProfileMenuItem(text: 'Logout'),
-                  ],
-                ),
-              ),
-            ),
-            _ProfileBottomBar(
-              onHomeTap: () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const ViewPostsPage(),
                   ),
-                );
-              },
-              onCalendarTap: () {
-                openCalendarPage(context);
-              },
-              onSetterTap: () {
-                openSetterPage(context);
-              },
-            ),
-          ],
+                ),
+                _ProfileBottomBar(
+                  onHomeTap: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ViewPostsPage(),
+                      ),
+                    );
+                  },
+                  onCalendarTap: () {
+                    openCalendarPage(context);
+                  },
+                  onSetterTap: () {
+                    openSetterPage(context);
+                  },
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -637,33 +979,38 @@ class _ProfilePill extends StatelessWidget {
 
 class _ProfileMenuItem extends StatelessWidget {
   final String text;
+  final VoidCallback? onTap;
 
   const _ProfileMenuItem({
     required this.text,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: BoxDecoration(
-        color: const Color(0xffE5E5E5),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 16),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 52,
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        decoration: BoxDecoration(
+          color: const Color(0xffE5E5E5),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(fontSize: 16),
+              ),
             ),
-          ),
-          const Icon(
-            Icons.arrow_forward_ios,
-            color: Color(0xff6A6A6A),
-          ),
-        ],
+            const Icon(
+              Icons.arrow_forward_ios,
+              color: Color(0xff6A6A6A),
+            ),
+          ],
+        ),
       ),
     );
   }
