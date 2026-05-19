@@ -756,6 +756,9 @@ class ViewPostsPage extends StatefulWidget {
 
 class _ViewPostsPageState extends State<ViewPostsPage> {
   String? selectedCategoryFilter;
+  String searchText = '';
+
+  final TextEditingController searchController = TextEditingController();
 
   final List<String> categories = [
     "Academics",
@@ -764,6 +767,29 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
     "Organization",
     "Campus Updates",
   ];
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  bool matchesSearch(QueryDocumentSnapshot announcement) {
+    final query = searchText.trim().toLowerCase();
+
+    if (query.isEmpty) {
+      return true;
+    }
+
+    final data = announcement.data() as Map<String, dynamic>;
+    final title = (data['title'] ?? '').toString().toLowerCase();
+    final details = (data['details'] ?? '').toString().toLowerCase();
+    final category = (data['category'] ?? data['type'] ?? '').toString().toLowerCase();
+
+    return title.contains(query) ||
+        details.contains(query) ||
+        category.contains(query);
+  }
 
   String formatDate(dynamic timestamp) {
     if (timestamp == null) {
@@ -872,11 +898,12 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
 
                   final announcements = snapshot.data!.docs;
 
-                  final filteredAnnouncements = selectedCategoryFilter == null
-                      ? announcements
-                      : announcements.where((announcement) {
-                          return getAnnouncementCategory(announcement) == selectedCategoryFilter;
-                        }).toList();
+                  final filteredAnnouncements = announcements.where((announcement) {
+                    final matchesCategory = selectedCategoryFilter == null ||
+                        getAnnouncementCategory(announcement) == selectedCategoryFilter;
+
+                    return matchesCategory && matchesSearch(announcement);
+                  }).toList();
 
                   return Padding(
                     padding: const EdgeInsets.all(20),
@@ -927,8 +954,14 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
                             border: Border.all(color: Colors.grey.shade300),
                             borderRadius: BorderRadius.circular(25),
                           ),
-                          child: const TextField(
-                            decoration: InputDecoration(
+                          child: TextField(
+                            controller: searchController,
+                            onChanged: (value) {
+                              setState(() {
+                                searchText = value;
+                              });
+                            },
+                            decoration: const InputDecoration(
                               icon: Icon(Icons.search, color: Colors.grey),
                               hintText: "Search announcements",
                               hintStyle: TextStyle(color: Colors.grey, fontSize: 13),
@@ -1091,9 +1124,14 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
     }
 
     if (filteredAnnouncements.isEmpty) {
+      final hasSearchText = searchText.trim().isNotEmpty;
+      final message = hasSearchText
+          ? "No announcements found."
+          : "No $selectedCategoryFilter announcements.";
+
       return Center(
         child: Text(
-          "No $selectedCategoryFilter announcements.",
+          message,
           style: const TextStyle(color: Colors.grey),
         ),
       );

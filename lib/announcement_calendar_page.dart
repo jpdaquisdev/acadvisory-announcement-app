@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'announcement_setter_page.dart';
+import 'main.dart' show ProfilePage;
 
 class _CalendarDragScrollBehavior extends MaterialScrollBehavior {
   const _CalendarDragScrollBehavior();
@@ -371,19 +372,41 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
                       const SizedBox(height: 30),
 
                       Center(
-                        child: Container(
-                          width: 170,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xffFFCB45),
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                          child: const Text(
-                            "WHAT’S NEW",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                        child: GestureDetector(
+                          onTap: () {
+                            final latestAnnouncement = announcements.first;
+                            final latestDateKey = getDateKey(getDateTime(latestAnnouncement));
+                            final announcementsOnLatestDate =
+                                groupedAnnouncements[latestDateKey] ?? [];
+
+                            int latestIndex = announcementsOnLatestDate.indexWhere((announcement) {
+                              return announcement.id == latestAnnouncement.id;
+                            });
+
+                            if (latestIndex < 0) {
+                              latestIndex = 0;
+                            }
+
+                            selectDate(
+                              latestDateKey,
+                              dateKeys,
+                              announcementIndex: latestIndex,
+                            );
+                          },
+                          child: Container(
+                            width: 170,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xffFFCB45),
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            child: const Text(
+                              "WHAT’S NEW",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
                             ),
                           ),
                         ),
@@ -843,7 +866,18 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
               );
             },
           ),
-          bottomIcon(Icons.person_outline, false),
+          bottomIcon(
+            Icons.person_outline,
+            false,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProfilePage(),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );

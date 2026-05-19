@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'announcement_calendar_page.dart';
+import 'main.dart' show ProfilePage;
 
 class AnnouncementSetterPage extends StatefulWidget {
   const AnnouncementSetterPage({super.key});
@@ -289,7 +290,18 @@ class _AnnouncementSetterPageState extends State<AnnouncementSetterPage> {
                     },
                   ),
                   bottomIcon(Icons.chat_bubble_outline, true),
-                  bottomIcon(Icons.person_outline, false),
+                  bottomIcon(
+                    Icons.person_outline,
+                    false,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const ProfilePage(),
+                        ),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
