@@ -758,7 +758,9 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
   String? selectedCategoryFilter;
   String searchText = '';
 
+  late final Stream<QuerySnapshot> announcementsStream;
   final TextEditingController searchController = TextEditingController();
+  final FocusNode searchFocusNode = FocusNode();
 
   final List<String> categories = [
     "Academics",
@@ -769,8 +771,18 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    announcementsStream = FirebaseFirestore.instance
+        .collection('announcements')
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  @override
   void dispose() {
     searchController.dispose();
+    searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -879,10 +891,7 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
           children: [
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('announcements')
-                    .orderBy('createdAt', descending: true)
-                    .snapshots(),
+                stream: announcementsStream,
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
                     return const Center(
@@ -956,6 +965,7 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
                           ),
                           child: TextField(
                             controller: searchController,
+                            focusNode: searchFocusNode,
                             onChanged: (value) {
                               setState(() {
                                 searchText = value;
