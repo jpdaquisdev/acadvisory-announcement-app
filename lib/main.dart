@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'firebase_options.dart';
 import 'announcement_setter_page.dart';
@@ -214,6 +217,8 @@ class _AuthPageState extends State<AuthPage> {
           'username': username,
           'email': email,
           'role': 'Student',
+          'photoUrl': '',
+          'photoBase64': '',
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         });
@@ -810,6 +815,20 @@ class ProfilePage extends StatelessWidget {
     return (userData?['role'] ?? 'Student').toString().toUpperCase();
   }
 
+  String getPhotoUrl(Map<String, dynamic>? userData, User? user) {
+    final firestorePhoto = (userData?['photoUrl'] ?? '').toString().trim();
+
+    if (firestorePhoto.isNotEmpty) {
+      return firestorePhoto;
+    }
+
+    return (user?.photoURL ?? '').trim();
+  }
+
+  String getPhotoBase64(Map<String, dynamic>? userData) {
+    return (userData?['photoBase64'] ?? '').toString().trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -828,6 +847,8 @@ class ProfilePage extends StatelessWidget {
             final userData = snapshot.data?.data();
             final fullName = getFullName(userData, currentUser);
             final role = getRole(userData);
+            final photoUrl = getPhotoUrl(userData, currentUser);
+            final photoBase64 = getPhotoBase64(userData);
 
             return Column(
               children: [
@@ -858,14 +879,22 @@ class ProfilePage extends StatelessWidget {
                         const SizedBox(height: 26),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: const [
-                            _ProfilePill(
+                          children: [
+                            const _ProfilePill(
                               text: 'PROFILE',
                               color: _AuthPageState.accentColor,
                             ),
                             _ProfilePill(
                               text: 'EDIT PROFILE',
                               color: _AuthPageState.softYellow,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => const EditProfilePage(),
+                                  ),
+                                );
+                              },
                             ),
                           ],
                         ),
@@ -879,11 +908,21 @@ class ProfilePage extends StatelessWidget {
                           ),
                           child: Column(
                             children: [
-                              const CircleAvatar(
+                              _ProfileImageUploader(
+                                photoUrl: photoUrl,
+                                photoBase64: photoBase64,
                                 radius: 78,
-                                backgroundColor: Color(0xffB8B8B8),
                               ),
-                              const SizedBox(height: 24),
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Tap photo to choose',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xff6A6A6A),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
                               Text(
                                 fullName,
                                 textAlign: TextAlign.center,
@@ -949,28 +988,367 @@ class ProfilePage extends StatelessWidget {
   }
 }
 
+class EditProfilePage extends StatefulWidget {
+  const EditProfilePage({super.key});
+
+  @override
+  State<EditProfilePage> createState() => _EditProfilePageState();
+}
+
+class _EditProfilePageState extends State<EditProfilePage> {
+  final TextEditingController firstNameController = TextEditingController();
+  final TextEditingController lastNameController = TextEditingController();
+  final TextEditingController usernameController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
+
+  bool hasLoadedUserData = false;
+  bool isSaving = false;
+  String? profileMessage;
+
+  @override
+  void dispose() {
+    firstNameController.dispose();
+    lastNameController.dispose();
+    usernameController.dispose();
+    emailController.dispose();
+    super.dispose();
+  }
+
+  void loadUserData(Map<String, dynamic>? userData, User user) {
+    if (hasLoadedUserData) {
+      return;
+    }
+
+    final displayName = (user.displayName ?? '').trim();
+    final displayNameParts = displayName.split(' ');
+
+    firstNameController.text = (userData?['firstName'] ??
+            (displayNameParts.isNotEmpty ? displayNameParts.first : ''))
+        .toString()
+        .trim();
+    lastNameController.text = (userData?['lastName'] ??
+            (displayNameParts.length > 1 ? displayNameParts.sublist(1).join(' ') : ''))
+        .toString()
+        .trim();
+    usernameController.text = (userData?['username'] ?? '').toString().trim();
+    emailController.text = (userData?['email'] ?? user.email ?? '').toString().trim();
+
+    hasLoadedUserData = true;
+  }
+
+  String getPhotoUrl(Map<String, dynamic>? userData, User user) {
+    final firestorePhoto = (userData?['photoUrl'] ?? '').toString().trim();
+
+    if (firestorePhoto.isNotEmpty) {
+      return firestorePhoto;
+    }
+
+    return (user.photoURL ?? '').trim();
+  }
+
+  String getPhotoBase64(Map<String, dynamic>? userData) {
+    return (userData?['photoBase64'] ?? '').toString().trim();
+  }
+
+  String getSaveErrorMessage(FirebaseAuthException error) {
+    if (error.code == 'invalid-email') {
+      return 'Please enter a valid email address.';
+    }
+
+    if (error.code == 'email-already-in-use') {
+      return 'This email is already used by another account.';
+    }
+
+    if (error.code == 'requires-recent-login') {
+      return 'Please logout, login again, then update your email.';
+    }
+
+    if (error.code == 'network-request-failed') {
+      return 'Please check your internet connection.';
+    }
+
+    return error.message ?? 'Unable to save profile. Please try again.';
+  }
+
+  Future<void> saveProfile(User user) async {
+    final firstName = firstNameController.text.trim();
+    final lastName = lastNameController.text.trim();
+    final username = usernameController.text.trim();
+    final email = emailController.text.trim();
+
+    if (firstName.isEmpty || lastName.isEmpty || username.isEmpty || email.isEmpty) {
+      setState(() {
+        profileMessage = 'Please complete all profile fields.';
+      });
+      return;
+    }
+
+    setState(() {
+      isSaving = true;
+      profileMessage = null;
+    });
+
+    try {
+      final currentEmail = (user.email ?? '').trim();
+
+      if (email != currentEmail) {
+        await user.updateEmail(email);
+      }
+
+      final fullName = '$firstName $lastName'.trim();
+      await user.updateDisplayName(fullName);
+
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'uid': user.uid,
+        'firstName': firstName,
+        'lastName': lastName,
+        'username': username,
+        'email': email,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile updated successfully.'),
+        ),
+      );
+
+      Navigator.pop(context);
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        profileMessage = getSaveErrorMessage(error);
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        profileMessage = 'Unable to save profile. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          isSaving = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    if (currentUser == null) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: Text('No logged in user.'),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('users')
+              .doc(currentUser.uid)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(),
+              );
+            }
+
+            final userData = snapshot.data?.data();
+            loadUserData(userData, currentUser);
+            final photoUrl = getPhotoUrl(userData, currentUser);
+            final photoBase64 = getPhotoBase64(userData);
+
+            return Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pop(context);
+                          },
+                          child: Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xffBDBDBD)),
+                            ),
+                            child: const Icon(
+                              Icons.arrow_back_ios_new,
+                              color: Color(0xff6A6A6A),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 26),
+                        const Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _ProfilePill(
+                              text: 'PROFILE',
+                              color: _AuthPageState.softYellow,
+                            ),
+                            _ProfilePill(
+                              text: 'EDIT PROFILE',
+                              color: _AuthPageState.accentColor,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
+                          decoration: BoxDecoration(
+                            color: const Color(0xffE5E5E5),
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: Column(
+                            children: [
+                              _ProfileImageUploader(
+                                photoUrl: photoUrl,
+                                photoBase64: photoBase64,
+                                radius: 58,
+                              ),
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Tap photo to choose',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xff6A6A6A),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 22),
+                              _EditProfileTextField(
+                                label: 'First Name',
+                                controller: firstNameController,
+                                enabled: !isSaving,
+                              ),
+                              const SizedBox(height: 12),
+                              _EditProfileTextField(
+                                label: 'Last Name',
+                                controller: lastNameController,
+                                enabled: !isSaving,
+                              ),
+                              const SizedBox(height: 12),
+                              _EditProfileTextField(
+                                label: 'Username',
+                                controller: usernameController,
+                                enabled: !isSaving,
+                              ),
+                              const SizedBox(height: 12),
+                              _EditProfileTextField(
+                                label: 'Email',
+                                controller: emailController,
+                                keyboardType: TextInputType.emailAddress,
+                                enabled: !isSaving,
+                              ),
+                              if (profileMessage != null) ...[
+                                const SizedBox(height: 14),
+                                _AuthMessage(text: profileMessage!),
+                              ],
+                              const SizedBox(height: 22),
+                              _AuthRoundedButton(
+                                label: isSaving ? 'Saving...' : 'Save Profile',
+                                backgroundColor: Colors.black,
+                                textColor: Colors.white,
+                                onTap: isSaving
+                                    ? null
+                                    : () {
+                                        saveProfile(currentUser);
+                                      },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                _ProfileBottomBar(
+                  onHomeTap: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ViewPostsPage(),
+                      ),
+                    );
+                  },
+                  onCalendarTap: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const AnnouncementCalendarPage(),
+                      ),
+                    );
+                  },
+                  onSetterTap: () {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const AnnouncementSetterPage(),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class _ProfilePill extends StatelessWidget {
   final String text;
   final Color color;
+  final VoidCallback? onTap;
 
   const _ProfilePill({
     required this.text,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(25),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w900,
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(25),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+          ),
         ),
       ),
     );
@@ -1090,6 +1468,380 @@ class _ProfileBottomIcon extends StatelessWidget {
           color: selected ? Colors.black : Colors.white,
         ),
       ),
+    );
+  }
+}
+
+class _EditProfileTextField extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+  final TextInputType keyboardType;
+  final bool enabled;
+
+  const _EditProfileTextField({
+    required this.label,
+    required this.controller,
+    this.keyboardType = TextInputType.text,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      enabled: enabled,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(
+          color: Color(0xff6A6A6A),
+          fontWeight: FontWeight.w600,
+        ),
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileImageUploader extends StatefulWidget {
+  final String photoUrl;
+  final String photoBase64;
+  final double radius;
+
+  const _ProfileImageUploader({
+    required this.photoUrl,
+    required this.photoBase64,
+    required this.radius,
+  });
+
+  @override
+  State<_ProfileImageUploader> createState() => _ProfileImageUploaderState();
+}
+
+class _ProfileImageUploaderState extends State<_ProfileImageUploader> {
+  bool isUploading = false;
+
+  Future<void> pickAndUploadImage() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    if (currentUser == null || isUploading) {
+      return;
+    }
+
+    try {
+      final picker = ImagePicker();
+      final selectedImage = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 35,
+        maxWidth: 300,
+        maxHeight: 300,
+      );
+
+      if (selectedImage == null) {
+        return;
+      }
+
+      setState(() {
+        isUploading = true;
+      });
+
+      final imageBytes = await selectedImage.readAsBytes();
+      final photoBase64 = base64Encode(imageBytes);
+
+      await FirebaseFirestore.instance.collection('users').doc(currentUser.uid).set({
+        'photoBase64': photoBase64,
+        'photoUrl': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile picture saved.'),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to save profile picture. Please choose a smaller image.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isUploading = false;
+        });
+      }
+    }
+  }
+
+  Widget profileImageChild() {
+    if (widget.photoBase64.isNotEmpty) {
+      try {
+        return Image.memory(
+          base64Decode(widget.photoBase64),
+          width: widget.radius * 2,
+          height: widget.radius * 2,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return Icon(
+              Icons.person,
+              size: widget.radius,
+              color: Colors.white,
+            );
+          },
+        );
+      } catch (_) {
+        return Icon(
+          Icons.person,
+          size: widget.radius,
+          color: Colors.white,
+        );
+      }
+    }
+
+    if (widget.photoUrl.isNotEmpty) {
+      return Image.network(
+        widget.photoUrl,
+        width: widget.radius * 2,
+        height: widget.radius * 2,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Icon(
+            Icons.person,
+            size: widget.radius,
+            color: Colors.white,
+          );
+        },
+      );
+    }
+
+    return Icon(
+      Icons.person,
+      size: widget.radius,
+      color: Colors.white,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: pickAndUploadImage,
+      child: Stack(
+        alignment: Alignment.bottomRight,
+        children: [
+          Container(
+            width: widget.radius * 2,
+            height: widget.radius * 2,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xffB8B8B8),
+            ),
+            child: ClipOval(
+              child: profileImageChild(),
+            ),
+          ),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+            ),
+            child: isUploading
+                ? const Padding(
+                    padding: EdgeInsets.all(9),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(
+                    Icons.camera_alt,
+                    size: 18,
+                    color: Colors.white,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfilePhotoPreview extends StatelessWidget {
+  final String photoUrl;
+  final String photoBase64;
+  final double size;
+  final double borderRadius;
+
+  const _ProfilePhotoPreview({
+    required this.photoUrl,
+    required this.photoBase64,
+    required this.size,
+    required this.borderRadius,
+  });
+
+  Widget profileImageChild() {
+    if (photoBase64.isNotEmpty) {
+      try {
+        return Image.memory(
+          base64Decode(photoBase64),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return const Icon(
+              Icons.person,
+              color: Colors.black54,
+            );
+          },
+        );
+      } catch (_) {
+        return const Icon(
+          Icons.person,
+          color: Colors.black54,
+        );
+      }
+    }
+
+    if (photoUrl.isNotEmpty) {
+      return Image.network(
+        photoUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return const Icon(
+            Icons.person,
+            color: Colors.black54,
+          );
+        },
+      );
+    }
+
+    return const Icon(
+      Icons.person,
+      color: Colors.black54,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.grey[300],
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: profileImageChild(),
+      ),
+    );
+  }
+}
+
+class _DashboardUserHeader extends StatelessWidget {
+  const _DashboardUserHeader();
+
+  String getFirstName(Map<String, dynamic>? userData, User? user) {
+    final firstName = (userData?['firstName'] ?? '').toString().trim();
+
+    if (firstName.isNotEmpty) {
+      return firstName.toUpperCase();
+    }
+
+    final displayName = (user?.displayName ?? '').trim();
+
+    if (displayName.isNotEmpty) {
+      return displayName.split(' ').first.toUpperCase();
+    }
+
+    final email = (user?.email ?? '').trim();
+
+    if (email.isNotEmpty) {
+      return email.split('@').first.toUpperCase();
+    }
+
+    return 'USER';
+  }
+
+  String getPhotoUrl(Map<String, dynamic>? userData, User? user) {
+    final firestorePhoto = (userData?['photoUrl'] ?? '').toString().trim();
+
+    if (firestorePhoto.isNotEmpty) {
+      return firestorePhoto;
+    }
+
+    return (user?.photoURL ?? '').trim();
+  }
+
+  String getPhotoBase64(Map<String, dynamic>? userData) {
+    return (userData?['photoBase64'] ?? '').toString().trim();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: currentUser == null
+          ? null
+          : FirebaseFirestore.instance.collection('users').doc(currentUser.uid).snapshots(),
+      builder: (context, snapshot) {
+        final userData = snapshot.data?.data();
+        final firstName = getFirstName(userData, currentUser);
+        final photoUrl = getPhotoUrl(userData, currentUser);
+        final photoBase64 = getPhotoBase64(userData);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _ProfilePhotoPreview(
+                  photoUrl: photoUrl,
+                  photoBase64: photoBase64,
+                  size: 40,
+                  borderRadius: 10,
+                ),
+                const CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: Icon(Icons.notifications_none, color: Colors.black),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'HELLO,',
+              style: TextStyle(fontSize: 18),
+            ),
+            Text(
+              firstName,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Text(
+              'Stay updated with the latest announcements.',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1266,41 +2018,7 @@ class _ViewPostsPageState extends State<ViewPostsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.grey[300],
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                            ),
-                            const CircleAvatar(
-                              backgroundColor: Colors.white,
-                              child: Icon(Icons.notifications_none, color: Colors.black),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 20),
-
-                        const Text(
-                          "HELLO,",
-                          style: TextStyle(fontSize: 18),
-                        ),
-                        const Text(
-                          "JOHN LORENZ",
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Text(
-                          "Stay updated with the latest announcements.",
-                          style: TextStyle(color: Colors.grey, fontSize: 12),
-                        ),
+                        const _DashboardUserHeader(),
 
                         const SizedBox(height: 18),
 
