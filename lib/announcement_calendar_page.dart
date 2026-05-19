@@ -1,7 +1,20 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'announcement_setter_page.dart';
+
+class _CalendarDragScrollBehavior extends MaterialScrollBehavior {
+  const _CalendarDragScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+      };
+}
 
 class AnnouncementCalendarPage extends StatefulWidget {
   final String? initialAnnouncementId;
@@ -18,6 +31,7 @@ class AnnouncementCalendarPage extends StatefulWidget {
 class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
   final ScrollController dateScrollController = ScrollController();
   PageController announcementPageController = PageController(viewportFraction: 0.82);
+  late final Stream<QuerySnapshot> announcementsStream;
 
   String? selectedDateKey;
   int selectedAnnouncementIndex = 0;
@@ -26,6 +40,15 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
   final double dateItemSpacing = 10;
 
   double get dateItemExtent => dateItemWidth + dateItemSpacing;
+
+  @override
+  void initState() {
+    super.initState();
+    announcementsStream = FirebaseFirestore.instance
+        .collection('announcements')
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
 
   @override
   void dispose() {
@@ -125,6 +148,12 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
     return data['details'] ?? 'No details';
   }
 
+  double getDateListHorizontalPadding(double viewportWidth) {
+    return ((viewportWidth - dateItemWidth) / 2)
+        .clamp(0, double.infinity)
+        .toDouble();
+  }
+
   void centerSelectedDate(List<String> dateKeys) {
     if (selectedDateKey == null) {
       return;
@@ -136,8 +165,14 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
       return;
     }
 
-    double targetOffset = selectedIndex * dateItemExtent;
-    double maxScroll = dateScrollController.position.maxScrollExtent;
+    final position = dateScrollController.position;
+    final viewportWidth = position.viewportDimension;
+    final horizontalPadding = getDateListHorizontalPadding(viewportWidth);
+    final selectedItemCenter =
+        horizontalPadding + (selectedIndex * dateItemExtent) + (dateItemWidth / 2);
+
+    double targetOffset = selectedItemCenter - (viewportWidth / 2);
+    final maxScroll = position.maxScrollExtent;
 
     if (targetOffset < 0) {
       targetOffset = 0;
@@ -203,10 +238,7 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
 
       body: SafeArea(
         child: StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('announcements')
-              .orderBy('createdAt', descending: true)
-              .snapshots(),
+          stream: announcementsStream,
           builder: (context, snapshot) {
             if (snapshot.hasError) {
               return const Center(
@@ -361,59 +393,68 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
 
                       SizedBox(
                         height: 75,
-                        child: ListView.builder(
-                          controller: dateScrollController,
-                          scrollDirection: Axis.horizontal,
-                          padding: EdgeInsets.symmetric(
-                            horizontal: ((MediaQuery.of(context).size.width - dateItemWidth) / 2).clamp(0, double.infinity).toDouble(),
-                          ),
-                          itemCount: dateKeys.length,
-                          itemBuilder: (context, index) {
-                            final dateKey = dateKeys[index];
-                            final date = DateTime.parse(dateKey);
-                            final selected = dateKey == selectedDateKey;
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            return ScrollConfiguration(
+                              behavior: const _CalendarDragScrollBehavior(),
+                              child: ListView.builder(
+                                controller: dateScrollController,
+                                scrollDirection: Axis.horizontal,
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: getDateListHorizontalPadding(
+                                    constraints.maxWidth,
+                                  ),
+                                ),
+                                itemCount: dateKeys.length,
+                                itemBuilder: (context, index) {
+                                  final dateKey = dateKeys[index];
+                                  final date = DateTime.parse(dateKey);
+                                  final selected = dateKey == selectedDateKey;
 
-                            return GestureDetector(
-                              onTap: () {
-                                selectDate(dateKey, dateKeys);
-                              },
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 250),
-                                width: dateItemWidth,
-                                height: selected ? 68 : 58,
-                                margin: EdgeInsets.only(right: dateItemSpacing),
-                                decoration: BoxDecoration(
-                                  color: selected ? Colors.black : Colors.white,
-                                  borderRadius: BorderRadius.circular(10),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Colors.black26,
-                                      blurRadius: 5,
-                                      offset: Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      getMonthShort(date),
-                                      style: TextStyle(
-                                        color: selected ? Colors.white : Colors.grey,
-                                        fontSize: selected ? 12 : 10,
-                                        fontWeight: FontWeight.bold,
+                                  return GestureDetector(
+                                    onTap: () {
+                                      selectDate(dateKey, dateKeys);
+                                    },
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 250),
+                                      width: dateItemWidth,
+                                      height: selected ? 68 : 58,
+                                      margin: EdgeInsets.only(right: dateItemSpacing),
+                                      decoration: BoxDecoration(
+                                        color: selected ? Colors.black : Colors.white,
+                                        borderRadius: BorderRadius.circular(10),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Colors.black26,
+                                            blurRadius: 5,
+                                            offset: Offset(0, 3),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            getMonthShort(date),
+                                            style: TextStyle(
+                                              color: selected ? Colors.white : Colors.grey,
+                                              fontSize: selected ? 12 : 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          Text(
+                                            date.day.toString(),
+                                            style: TextStyle(
+                                              color: selected ? Colors.white : Colors.grey,
+                                              fontSize: selected ? 22 : 18,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    Text(
-                                      date.day.toString(),
-                                      style: TextStyle(
-                                        color: selected ? Colors.white : Colors.grey,
-                                        fontSize: selected ? 22 : 18,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                                  );
+                                },
                               ),
                             );
                           },
@@ -430,21 +471,24 @@ class _AnnouncementCalendarPageState extends State<AnnouncementCalendarPage> {
 
                       SizedBox(
                         height: 285,
-                        child: PageView.builder(
-                          key: ValueKey(selectedDateKey),
-                          controller: announcementPageController,
-                          padEnds: true,
-                          itemCount: selectedDateAnnouncements.length,
-                          onPageChanged: (index) {
-                            setState(() {
-                              selectedAnnouncementIndex = index;
-                            });
-                          },
-                          itemBuilder: (context, index) {
-                            return announcementDetailCard(
-                              selectedDateAnnouncements[index],
-                            );
-                          },
+                        child: ScrollConfiguration(
+                          behavior: const _CalendarDragScrollBehavior(),
+                          child: PageView.builder(
+                            controller: announcementPageController,
+                            physics: const PageScrollPhysics(),
+                            padEnds: true,
+                            itemCount: selectedDateAnnouncements.length,
+                            onPageChanged: (index) {
+                              setState(() {
+                                selectedAnnouncementIndex = index;
+                              });
+                            },
+                            itemBuilder: (context, index) {
+                              return announcementDetailCard(
+                                selectedDateAnnouncements[index],
+                              );
+                            },
+                          ),
                         ),
                       ),
 
